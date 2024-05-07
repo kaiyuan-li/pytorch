@@ -52,14 +52,14 @@ def _type(self, dtype=None, non_blocking=False, **kwargs):
     return dtype(self.size()).copy_(self, non_blocking)
 
 
-def _backend(self, backend_name, device=None, non_blocking=False, **kwargs):
+def _backend(self, backend_name, device_idx=None, non_blocking=False, **kwargs):
     """Returns a copy of this object in backend memory.
 
     If this object is already in backend memory and on the correct device, then
     no copy is performed and the original object is returned.
 
     Args:
-        device (int): The destination device id. Defaults to the current device.
+        device_idx (int): The destination device id. Defaults to the current device.
         non_blocking (bool): If ``True`` and the source is in pinned memory,
             the copy will be asynchronous with respect to the host. Otherwise,
             the argument has no effect.
@@ -72,21 +72,21 @@ def _backend(self, backend_name, device=None, non_blocking=False, **kwargs):
         device_module is not None
     ), f"{backend_name.upper()} device module is not loaded"
     if self.device.type == backend_name:
-        if device is None:
-            device = device_module.current_device()
-        if self.get_device() == device:
+        if device_idx is None:
+            device_idx = device_module.current_device()
+        if self.get_device() == device_idx:
             return self
     else:
-        if device is None:
-            device = -1
-    with device_module.device(device):
+        if device_idx is None:
+            device_idx = -1
+    with device_module.device(device_idx):
         if self.is_sparse and hasattr(device_module, "sparse"):
             new_type = getattr(device_module.sparse, self.__class__.__name__)
             indices = getattr(torch.Tensor._indices(self), backend_name)(
-                device, non_blocking
+                device_idx, non_blocking
             )
             values = getattr(torch.Tensor._values(self), backend_name)(
-                device, non_blocking
+                device_idx, non_blocking
             )
             return new_type(indices, values, self.size())
         else:

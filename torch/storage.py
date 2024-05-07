@@ -40,6 +40,7 @@ class _StorageBase:
     def type(self, dtype: _Optional[str] = None, non_blocking: bool = False) -> T: ...  # type: ignore[empty-body, misc, type-var] # noqa: E704
     def cuda(self, device=None, non_blocking=False, **kwargs) -> T: ...  # type: ignore[empty-body, misc, type-var] # noqa: E704
     def hpu(self, device=None, non_blocking=False, **kwargs) -> T: ...  # type: ignore[empty-body, misc, type-var] # noqa: E704
+    def xpu(self, device=None, non_blocking=False, **kwargs) -> T: ...  # type: ignore[empty-body, misc, type-var] # noqa: E704
     def element_size(self) -> int: ...  # type: ignore[empty-body, type-var] # noqa: E704
 
     def get_device(self) -> int:
@@ -384,6 +385,7 @@ def _load_from_bytes(b):
 _StorageBase.type = _type  # type: ignore[assignment]
 _StorageBase.cuda = lambda obj, *args, **kwargs: _backend(obj, "cuda", *args, **kwargs)  # type: ignore[assignment]
 _StorageBase.hpu = lambda obj, *args, **kwargs: _backend(obj, "hpu", *args, **kwargs)  # type: ignore[assignment]
+_StorageBase.xpu = lambda obj, *args, **kwargs: _backend(obj, "xpu", *args, **kwargs)  # type: ignore[assignment]
 
 
 @lru_cache(maxsize=None)
@@ -826,6 +828,13 @@ class TypedStorage:
         hpu_storage: torch.UntypedStorage = self._untyped_storage.hpu(device, non_blocking, **kwargs)
         return self._new_wrapped_storage(hpu_storage)
 
+    def xpu(self, device=None, non_blocking=False, **kwargs) -> T:  # type: ignore[misc, type-var]
+        _warn_typed_storage_removal()
+        if self.dtype in [torch.quint8, torch.quint4x2, torch.quint2x4, torch.qint32, torch.qint8]:
+            raise RuntimeError("Cannot create XPU storage with quantized dtype")
+        xpu_storage: torch.UntypedStorage = self._untyped_storage.xpu(device, non_blocking, **kwargs)
+        return self._new_wrapped_storage(xpu_storage)
+
     def element_size(self):
         _warn_typed_storage_removal()
         return self._element_size()
@@ -1211,6 +1220,7 @@ class TypedStorage:
 TypedStorage.type.__doc__ = _type.__doc__
 TypedStorage.cuda.__doc__ = _backend.__doc__
 TypedStorage.hpu.__doc__ = _backend.__doc__
+TypedStorage.xpu.__doc__ = _backend.__doc__
 
 class _LegacyStorageMeta(type):
     dtype: torch.dtype
