@@ -1,7 +1,7 @@
 import io
 
 import torch
-from ._utils import _type, _cuda, _hpu
+from ._utils import _type, _backend
 from torch.types import Storage
 from typing import cast, Any, Dict as _Dict, Optional as _Optional, TypeVar, Type, Union
 import copy
@@ -382,8 +382,8 @@ def _load_from_bytes(b):
 
 
 _StorageBase.type = _type  # type: ignore[assignment]
-_StorageBase.cuda = _cuda  # type: ignore[assignment]
-_StorageBase.hpu = _hpu  # type: ignore[assignment]
+_StorageBase.cuda = lambda obj, *args, **kwargs: _backend(obj, "cuda", *args, **kwargs)  # type: ignore[assignment]
+_StorageBase.hpu = lambda obj, *args, **kwargs: _backend(obj, "hpu", *args, **kwargs)  # type: ignore[assignment]
 
 
 @lru_cache(maxsize=None)
@@ -1209,8 +1209,8 @@ class TypedStorage:
             return None
 
 TypedStorage.type.__doc__ = _type.__doc__
-TypedStorage.cuda.__doc__ = _cuda.__doc__
-TypedStorage.hpu.__doc__ = _hpu.__doc__
+TypedStorage.cuda.__doc__ = _backend.__doc__
+TypedStorage.hpu.__doc__ = _backend.__doc__
 
 class _LegacyStorageMeta(type):
     dtype: torch.dtype

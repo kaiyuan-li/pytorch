@@ -52,70 +52,49 @@ def _type(self, dtype=None, non_blocking=False, **kwargs):
     return dtype(self.size()).copy_(self, non_blocking)
 
 
-def _hpu(self, device=None, non_blocking=False, **kwargs):
-    """Returns a copy of this object in HPU memory.
+def _backend(self, backend_name, device=None, non_blocking=False, **kwargs):
+    """Returns a copy of this object in backend memory.
 
-    If this object is already in HPU memory and on the correct device, then
+    If this object is already in backend memory and on the correct device, then
     no copy is performed and the original object is returned.
 
     Args:
-        device (int): The destination HPU id. Defaults to the current device.
+        device (int): The destination device id. Defaults to the current device.
         non_blocking (bool): If ``True`` and the source is in pinned memory,
             the copy will be asynchronous with respect to the host. Otherwise,
             the argument has no effect.
         **kwargs: For compatibility, may contain the key ``async`` in place of
             the ``non_blocking`` argument.
     """
-    non_blocking = _get_async_or_non_blocking("hpu", non_blocking, kwargs)
-    hpu = getattr(torch, "hpu", None)
-    assert hpu is not None, "HPU device module is not loaded"
-    if self.is_hpu:
+    non_blocking = _get_async_or_non_blocking(backend_name, non_blocking, kwargs)
+    device_module = getattr(torch, backend_name, None)
+    assert (
+        device_module is not None
+    ), f"{backend_name.upper()} device module is not loaded"
+    if self.device.type == backend_name:
         if device is None:
-            device = hpu.current_device()
+            device = device_module.current_device()
         if self.get_device() == device:
             return self
     else:
         if device is None:
             device = -1
-    with hpu.device(device):
-        assert not self.is_sparse, "sparse storage is not supported for HPU tensors"
-        untyped_storage = torch.UntypedStorage(self.size(), device=torch.device("hpu"))
-        untyped_storage.copy_(self, non_blocking)
-        return untyped_storage
-
-
-def _cuda(self, device=None, non_blocking=False, **kwargs):
-    """Returns a copy of this object in CUDA memory.
-
-    If this object is already in CUDA memory and on the correct device, then
-    no copy is performed and the original object is returned.
-
-    Args:
-        device (int): The destination GPU id. Defaults to the current device.
-        non_blocking (bool): If ``True`` and the source is in pinned memory,
-            the copy will be asynchronous with respect to the host. Otherwise,
-            the argument has no effect.
-        **kwargs: For compatibility, may contain the key ``async`` in place of
-            the ``non_blocking`` argument.
-    """
-    non_blocking = _get_async_or_non_blocking("cuda", non_blocking, kwargs)
-    if self.is_cuda:
-        if device is None:
-            device = torch.cuda.current_device()
-        if self.get_device() == device:
-            return self
-    else:
-        if device is None:
-            device = -1
-    with torch.cuda.device(device):
-        if self.is_sparse:
-            new_type = getattr(torch.cuda.sparse, self.__class__.__name__)
-            indices = torch.Tensor._indices(self).cuda(device, non_blocking)
-            values = torch.Tensor._values(self).cuda(device, non_blocking)
+    with device_module.device(device):
+        if self.is_sparse and hasattr(device_module, "sparse"):
+            new_type = getattr(device_module.sparse, self.__class__.__name__)
+            indices = getattr(torch.Tensor._indices(self), backend_name)(
+                device, non_blocking
+            )
+            values = getattr(torch.Tensor._values(self), backend_name)(
+                device, non_blocking
+            )
             return new_type(indices, values, self.size())
         else:
+            assert (
+                not self.is_sparse
+            ), f"sparse storage is not supported for {backend_name.upper()} tensors"
             untyped_storage = torch.UntypedStorage(
-                self.size(), device=torch.device("cuda")
+                self.size(), device=torch.device(backend_name)
             )
             untyped_storage.copy_(self, non_blocking)
             return untyped_storage
