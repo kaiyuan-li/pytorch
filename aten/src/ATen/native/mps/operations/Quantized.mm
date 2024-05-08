@@ -10,9 +10,9 @@
 #endif
 #include <ATen/mps/MPSProfiler.h>
 #include <ATen/native/mps/OperationUtils.h>
-// For Metal3_1
-#include <ATen/native/mps/MPSGraphSonomaOps.h>
 #include <fmt/format.h>
+
+// #define _CAPTURE_KERNEL 1
 
 namespace at::native {
 
@@ -180,13 +180,11 @@ Tensor _weight_int4pack_mm_mps(const Tensor& A, const Tensor& B, int64_t qGroupS
   auto C = at::empty({M, N}, A.options());
   MPSStream* mpsStream = getCurrentMPSStream();
   std::array<uint32_t, 3> sizes = {static_cast<uint32_t>(M), static_cast<uint32_t>(K), static_cast<uint32_t>(N)};
-  static bool firstCapture = false;
   dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
     @autoreleasepool {
 #if _CAPTURE_KERNEL
-      auto& profiler = getMPSProfiler();
-      if (profiler.isCaptureEnabled()) {
-        profiler.startCapture(__func__, mpsStream);
+      if (getMPSProfiler().isCaptureEnabled()) {
+        getMPSProfiler().startCapture(__func__, mpsStream);
       }
 #endif
       id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
@@ -200,8 +198,8 @@ Tensor _weight_int4pack_mm_mps(const Tensor& A, const Tensor& B, int64_t qGroupS
       [computeEncoder setBytes:sizes.data() length:sizeof(uint32_t) * sizes.size() atIndex:4];
       mtl_dispatch1DJob(computeEncoder, quantizedPSO, C.numel());
 #if _CAPTURE_KERNEL
-      if (profiler.isCapturing()) {
-        profiler.stopCapture(mpsStream);
+      if (getMPSProfiler().isCapturing()) {
+        getMPSProfiler().stopCapture(mpsStream);
       }
 #endif
     }
@@ -231,6 +229,11 @@ Tensor _weight_int8pack_mm_mps(const Tensor& A, const Tensor& B, const Tensor& s
   std::array<uint32_t, 3> sizes = {static_cast<uint32_t>(M), static_cast<uint32_t>(K), static_cast<uint32_t>(N)};
   dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
     @autoreleasepool {
+#if _CAPTURE_KERNEL
+      if (getMPSProfiler().isCaptureEnabled()) {
+        getMPSProfiler().startCapture(__func__, mpsStream);
+      }
+#endif
       id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
       const std::string kernel = fmt::format("int8pack_mm_{}", scalarToMetalTypeString(A));
       id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
@@ -241,6 +244,11 @@ Tensor _weight_int8pack_mm_mps(const Tensor& A, const Tensor& B, const Tensor& s
       mtl_setBuffer(computeEncoder, C, 3);
       [computeEncoder setBytes:sizes.data() length:sizeof(uint32_t) * sizes.size() atIndex:4];
       mtl_dispatch1DJob(computeEncoder, quantizedPSO, C.numel());
+#if _CAPTURE_KERNEL
+      if (getMPSProfiler().isCapturing()) {
+        getMPSProfiler().stopCapture(mpsStream);
+      }
+#endif
     }
   });
 
