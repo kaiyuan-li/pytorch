@@ -240,6 +240,7 @@ struct InputBuffers : public std::unordered_map<Node*, InputBuffer> {
 
 static PyObject* the_autograd_compiler = nullptr;
 static PyObject* set_autograd_compiler(PyObject* dummy, PyObject* args);
+static PyObject* clear_autograd_compiler(PyObject* dummy, PyObject* args);
 
 static PyObject* clear_cache(PyObject* dummy, PyObject* args) {
   HANDLE_TH_ERRORS;
@@ -269,6 +270,7 @@ static PyObject* set_verbose_logging(PyObject* dummy, PyObject* args) {
 // NOLINTNEXTLINE(*array*)
 static PyMethodDef _methods[] = {
     {"set_autograd_compiler", set_autograd_compiler, METH_VARARGS, nullptr},
+    {"clear_autograd_compiler", clear_autograd_compiler, METH_NOARGS, nullptr},
     {"clear_cache", clear_cache, METH_NOARGS, nullptr},
     {"is_cache_empty", is_cache_empty, METH_NOARGS, nullptr},
     {"set_verbose_logging", set_verbose_logging, METH_VARARGS, nullptr},
@@ -310,7 +312,8 @@ static TraceState call_begin_capture(
 static PyObject* call_end_capture(PyObject* self, const variable_list& inputs) {
   static PyObject* method_name = PyUnicode_InternFromString("end_capture");
   THPObjectPtr pyinput(THPVariable_WrapList(inputs));
-  return check(PyObject_CallMethodOneArg(self, method_name, pyinput.get()));
+  return check(
+      PyObject_CallMethodObjArgs(self, method_name, pyinput.get(), nullptr));
 }
 
 struct ClosingTHPObjectPtr : public THPObjectPtr {
@@ -561,18 +564,20 @@ variable_list compiled_autograd(
 static PyObject* set_autograd_compiler(PyObject* dummy, PyObject* args) {
   HANDLE_TH_ERRORS;
   PyObject* obj = nullptr;
-  if (!PyArg_ParseTuple(args, "O", &obj)) {
+  PyObject* py_ctx_manager_override = nullptr;
+  if (!PyArg_ParseTuple(args, "OO", &obj, &py_ctx_manager_override)) {
     return nullptr;
   }
+  bool ctx_manager_override = PyObject_IsTrue(py_ctx_manager_override);
 
   PyObject* prior = the_autograd_compiler;
   if (obj == Py_None) { // disable
     the_autograd_compiler = nullptr; // decref not needed due to `prior`
-    Engine::set_compiled_autograd(nullptr);
+    Engine::set_compiled_autograd(nullptr, ctx_manager_override);
   } else { // enable
     Py_INCREF(obj);
     the_autograd_compiler = obj;
-    Engine::set_compiled_autograd(&compiled_autograd);
+    Engine::set_compiled_autograd(&compiled_autograd, ctx_manager_override);
   }
 
   if (prior == nullptr) {
@@ -580,6 +585,17 @@ static PyObject* set_autograd_compiler(PyObject* dummy, PyObject* args) {
   } else {
     return prior;
   }
+  END_HANDLE_TH_ERRORS;
+}
+
+static PyObject* clear_autograd_compiler(PyObject* dummy, PyObject* args) {
+  HANDLE_TH_ERRORS;
+  if (the_autograd_compiler != nullptr) {
+    Py_DECREF(the_autograd_compiler);
+  }
+  the_autograd_compiler = nullptr;
+  Engine::set_compiled_autograd(nullptr, false);
+  Py_RETURN_NONE;
   END_HANDLE_TH_ERRORS;
 }
 

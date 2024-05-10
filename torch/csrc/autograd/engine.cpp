@@ -78,6 +78,7 @@ inline bool should_run_in_cpu_ready_queue(c10::DeviceType device) {
 }
 
 std::atomic<Engine::compiled_autograd_fn> the_compiled_autograd = nullptr;
+std::atomic<bool> the_compiled_autograd_ctx_manager_override = false;
 #define COMPILED_AUTOGRAD_POISON \
   reinterpret_cast<Engine::compiled_autograd_fn>(1)
 std::atomic<int32_t> num_threads_in_backwards;
@@ -1152,7 +1153,7 @@ inline static uint64_t compute_min_topological_nr(const edge_list& outputs) {
 auto Engine::compute_dependencies(
     Node* root,
     GraphTask& task,
-    uint64_t min_topo_nr) -> void {
+    uint64_t min_topo_nr) -> bool {
   // Computes the number of dependencies for each function which requires grad
   std::vector<Node*> queue{root};
   bool will_use_accelerator = false;
@@ -1160,6 +1161,7 @@ auto Engine::compute_dependencies(
   // Queue contains all nodes that will start propagating gradients.
   // We no longer have to expand functions that don't require grad.
   auto& dependencies = task.dependencies_;
+  bool marked_for_compiled_autograd = false;
   while (!queue.empty()) {
     auto fn = queue.back();
     queue.pop_back();
@@ -1169,6 +1171,11 @@ auto Engine::compute_dependencies(
     if (!will_use_accelerator) {
       will_use_accelerator = fn->stream().has_value();
     }
+    if (fn->has_compiler_fn()) {
+      // fn's forward was torch.compile'd with compiled autograd enabled
+      marked_for_compiled_autograd = true;
+    }
+
     for (const auto& edge : fn->next_edges()) {
       if (auto next_ptr = edge.function.get()) {
         dependencies[next_ptr] += 1;
@@ -1185,6 +1192,8 @@ auto Engine::compute_dependencies(
     // leaf_streams.
     task.stash_current_streams();
   }
+
+  return marked_for_compiled_autograd;
 }
 
 auto Engine::execute(
@@ -1212,6 +1221,8 @@ auto Engine::execute(
   CompiledAutogradThreadingDebugCheck _thread_check;
   auto compiled_autograd = the_compiled_autograd.load();
   TORCH_INTERNAL_ASSERT(compiled_autograd != COMPILED_AUTOGRAD_POISON);
+  bool compiled_autograd_ctx_manager_override =
+      the_compiled_autograd_ctx_manager_override.load();
 
   // accumulate_grad is true if and only if the frontend call was to
   // backward(), not grad(). grad() returns the sum of the gradients
@@ -1248,14 +1259,22 @@ auto Engine::execute(
 
   auto min_topo_nr = compute_min_topological_nr(outputs);
   // Now compute the dependencies for all executable functions
-  compute_dependencies(graph_root.get(), *graph_task, min_topo_nr);
+  bool marked_for_compiled_autograd =
+      compute_dependencies(graph_root.get(), *graph_task, min_topo_nr);
 
   if (!outputs.empty()) {
     graph_task->init_to_execute(
         *graph_root, outputs, accumulate_grad, min_topo_nr);
   }
 
-  if (compiled_autograd != nullptr) {
+  std::cout << "c++ autograd engine, compiled_autograd.fn=" << compiled_autograd
+            << "compiled_autograd.ctx_manager_override"
+            << compiled_autograd_ctx_manager_override
+            << ", marked_for_compiled_autograd=" << marked_for_compiled_autograd
+            << std::endl;
+  if (compiled_autograd != nullptr &&
+      (marked_for_compiled_autograd ||
+       compiled_autograd_ctx_manager_override)) {
     // see [Note: Compiled Autograd]
     TORCH_CHECK(
         !create_graph, "compiled_autograd does not support create_graph");
@@ -1398,15 +1417,19 @@ Engine& Engine::get_default_engine() {
   return engine_stub.load()();
 }
 
-void Engine::set_compiled_autograd(Engine::compiled_autograd_fn fn) {
+void Engine::set_compiled_autograd(
+    Engine::compiled_autograd_fn fn,
+    bool ctx_manager_override) {
   if (the_compiled_autograd.load() == fn) {
+    the_compiled_autograd_ctx_manager_override.store(ctx_manager_override);
     return;
   }
   auto prior = the_compiled_autograd.exchange(COMPILED_AUTOGRAD_POISON);
   TORCH_CHECK(
       num_threads_in_backwards.load() == 0 && prior != COMPILED_AUTOGRAD_POISON,
-      "compiled_autograd.enable() requires no threads in backwards()");
+      "Enabling compiled autograd requires no threads in backwards()");
   the_compiled_autograd.store(fn);
+  the_compiled_autograd_ctx_manager_override.store(ctx_manager_override);
 }
 
 void Engine::queue_callback(std::function<void()> callback) {
